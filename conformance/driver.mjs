@@ -28,6 +28,9 @@ for (const step of steps) {
       let properties = step.properties
       if (step.poison) properties = { ...properties, poison: 10n }
       if (step.nan) properties = { ...properties, nan: NaN }
+      if (step.dateTime) properties = { ...properties, dateTime: new Date(step.dateTime) }
+      if (step.decimal) properties = { ...properties, decimal: step.decimal } // JavaScript has no decimal type
+      if (step.invalidUnicode) properties = { ...properties, invalidUnicode: 'ok\ud800' }
       vexo.capture({
         distinctId: step.distinctId,
         event: step.event,

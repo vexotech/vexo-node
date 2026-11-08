@@ -4,15 +4,27 @@
   "description": "Send server-side events and identifies to Vexo from Node.js.",
   "main": "index.js",
   "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs",
+      "require": "./index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
     "index.js",
+    "index.mjs",
     "index.d.ts"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "test": "node --test"
+    "build": "node scripts/build.mjs",
+    "pretest": "npm run build",
+    "test": "node --test",
+    "prepack": "npm run build"
   },
   "keywords": [
     "vexo",

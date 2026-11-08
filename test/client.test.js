@@ -5,6 +5,7 @@ const assert = require('node:assert/strict')
 const http = require('node:http')
 const net = require('node:net')
 const { Vexo } = require('..')
+const { version } = require('../package.json')
 
 // A local API that records each batch request and answers with the next scripted response.
 async function fakeApi (responses = []) {
@@ -45,7 +46,7 @@ test('sends queued messages as one batch with the API key', async (t) => {
   assert.equal(request.method, 'POST')
   assert.equal(request.url, '/v1/batch')
   assert.equal(request.headers['x-api-key'], 'test-key')
-  assert.match(request.headers['user-agent'], /^vexo-node\//)
+  assert.equal(request.headers['user-agent'], `vexo-node/${version}`)
   const [identify, capture] = request.body.batch
   assert.deepEqual({ type: identify.type, distinctId: identify.distinctId, traits: identify.traits },
     { type: 'identify', distinctId: 'user_1', traits: { plan: 'pro' } })
@@ -82,6 +83,11 @@ test('counts a 2xx it cannot parse as accepted', async (t) => {
   await vexo.shutdown()
   assert.equal(api.requests.length, 1)
   assert.deepEqual(errors, [])
+})
+
+test('the ES module entry exports the same client as the CommonJS build', async () => {
+  const esm = await import('../index.mjs')
+  assert.deepEqual(Object.getOwnPropertyNames(esm.Vexo.prototype), Object.getOwnPropertyNames(Vexo.prototype))
 })
 
 test('flushes when the queue reaches flushAt', async (t) => {

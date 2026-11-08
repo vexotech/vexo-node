@@ -1,13 +1,15 @@
 'use strict'
+// Generated from index.mjs by `npm run build`. Edit index.mjs, not this file.
 
-const { randomUUID } = require('node:crypto')
-const { version } = require('./package.json')
-
+// The source of the package: ES module, Web APIs only, so it runs on Node.js, Deno, Bun, Cloudflare Workers, and
+// Vercel Edge. index.js is its CommonJS build (npm run build).
+const VERSION = '0.1.0' // the package.json version; a test keeps them equal
 const DEFAULT_HOST = 'https://api.vexo.co'
 // The server rejects a batch of more than 500 messages or a body over 5 MB.
 const MAX_BATCH_SIZE = 500
 const MAX_BODY_BYTES = 5 * 1024 * 1024
-const BATCH_ENVELOPE_BYTES = Buffer.byteLength('{"batch":[]}')
+const BATCH_ENVELOPE_BYTES = '{"batch":[]}'.length
+const encoder = new TextEncoder()
 const MAX_BACKOFF_MS = 30000
 
 class Vexo {
@@ -36,10 +38,9 @@ class Vexo {
     this.circuitOpen = false
     this.deadline = null
     this.inflight = new Set()
-    this.timer = setInterval(() => this.flush(), this.flushInterval)
-    this.timer.unref()
-    // A script that ends without calling shutdown() still sends what it queued.
-    process.once('beforeExit', () => this.shutdown())
+    this.timer = unref(setInterval(() => this.flush(), this.flushInterval))
+    // A Node.js or Bun script that ends without calling shutdown() still sends what it queued.
+    globalThis.process?.once?.('beforeExit', () => this.shutdown())
   }
 
   /**
@@ -86,7 +87,7 @@ class Vexo {
       this.closed = true
       clearInterval(this.timer)
       this.deadline = Date.now() + this.shutdownTimeout
-      setTimeout(() => this.interrupt(), this.shutdownTimeout).unref()
+      unref(setTimeout(() => this.interrupt(), this.shutdownTimeout))
     }
     await this.flush()
   }
@@ -107,7 +108,7 @@ class Vexo {
       this.onError(new Error(`vexo: message dropped, it can't be sent as JSON: ${error.message}`))
       return
     }
-    entry.bytes = Buffer.byteLength(entry.json)
+    entry.bytes = encoder.encode(entry.json).length
     if (entry.bytes + BATCH_ENVELOPE_BYTES > MAX_BODY_BYTES) {
       this.onError(new Error('vexo: message dropped, it is larger than 5 MB'))
       return
@@ -200,7 +201,7 @@ class Vexo {
     try {
       return await fetch(`${this.host}/v1/batch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Api-Key': this.apiKey, 'User-Agent': `vexo-node/${version}` },
+        headers: { 'Content-Type': 'application/json', 'X-Api-Key': this.apiKey, 'User-Agent': `vexo-node/${VERSION}` },
         body,
         signal: controller.signal
       })
@@ -241,6 +242,28 @@ class Vexo {
       this.wake()
     }
   }
+}
+
+// A Node.js or Bun timer has unref(); Deno's is a number for Deno.unrefTimer(); Workers and Vercel Edge have neither.
+function unref (timer) {
+  if (typeof timer?.unref === 'function') {
+    timer.unref()
+  } else {
+    globalThis.Deno?.unrefTimer?.(timer)
+  }
+  return timer
+}
+
+// ponytail: Math.random fallback only where crypto.randomUUID is missing (Node.js 18 without
+// --experimental-global-webcrypto); fine for dedupe IDs, not for secrets.
+function randomUUID () {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID()
+  }
+  const hex = Array.from({ length: 32 }, () => Math.floor(Math.random() * 16).toString(16))
+  hex[12] = '4'
+  hex[16] = '89ab'[Math.floor(Math.random() * 4)]
+  return hex.join('').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5')
 }
 
 // Integer epoch milliseconds for a Date, a number, or the default (now); an ISO 8601 string is sent as is.

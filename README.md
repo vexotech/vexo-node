@@ -49,7 +49,7 @@ Copy your app's API key from the app's [settings](https://docs.vexo.co/settings/
 | --- | --- | --- |
 | `host` | `https://api.vexo.co` | API base URL. |
 | `flushAt` | `100` | Send a batch when this many messages are queued (1 to 500). |
-| `flushInterval` | `10000` | Send whatever is queued every this many milliseconds. |
+| `flushInterval` | `10000` | Send whatever is queued every this many milliseconds. `0` turns the timer off, so messages go out only on `flushAt`, `flush()`, and `shutdown()`. |
 | `maxRetries` | `3` | Retries for network errors, `429`, and `5xx` responses. |
 | `maxQueueSize` | `10000` | Messages kept in memory; new messages are dropped once it's full. |
 | `timeout` | `10000` | Request timeout in milliseconds. |

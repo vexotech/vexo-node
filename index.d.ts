@@ -3,7 +3,7 @@ export interface VexoOptions {
   host?: string
   /** Send a batch when this many messages are queued (1-500). Default: 100 */
   flushAt?: number
-  /** Send whatever is queued every this many milliseconds. Default: 10000 */
+  /** Send whatever is queued every this many milliseconds; 0 turns the timer off. Default: 10000 */
   flushInterval?: number
   /** Retries for network errors, 429 and 5xx responses. Default: 3 */
   maxRetries?: number

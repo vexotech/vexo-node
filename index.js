@@ -38,9 +38,13 @@ class Vexo {
     this.circuitOpen = false
     this.deadline = null
     this.inflight = new Set()
-    this.timer = unref(setInterval(() => this.flush(), this.flushInterval))
+    // flushInterval 0: no timer, for runtimes without a long-lived process; send with flush() in each request.
+    if (this.flushInterval > 0) {
+      this.timer = unref(setInterval(() => this.flush(), this.flushInterval))
+    }
     // A Node.js or Bun script that ends without calling shutdown() still sends what it queued.
-    globalThis.process?.once?.('beforeExit', () => this.shutdown())
+    this.exitHook = () => this.shutdown()
+    globalThis.process?.once?.('beforeExit', this.exitHook)
   }
 
   /**
@@ -86,6 +90,8 @@ class Vexo {
     if (!this.closed) {
       this.closed = true
       clearInterval(this.timer)
+      // A client created per request (a serverless handler, say) mustn't leave a listener behind.
+      globalThis.process?.off?.('beforeExit', this.exitHook)
       this.deadline = Date.now() + this.shutdownTimeout
       unref(setTimeout(() => this.interrupt(), this.shutdownTimeout))
     }

@@ -115,6 +115,29 @@ test('flushes on the interval', async (t) => {
   await vexo.shutdown()
 })
 
+test('flushInterval 0 starts no timer, so only flush() sends', async (t) => {
+  const api = await fakeApi()
+  t.after(api.close)
+  const { vexo } = client(api.host, { flushInterval: 0 })
+
+  vexo.capture({ distinctId: 'u', event: 'a' })
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.equal(api.requests.length, 0)
+  await vexo.flush()
+  assert.equal(api.requests.length, 1)
+  await vexo.shutdown()
+})
+
+test('shutdown removes the client\'s beforeExit listener', async (t) => {
+  const api = await fakeApi()
+  t.after(api.close)
+  const before = process.listenerCount('beforeExit')
+  const { vexo } = client(api.host)
+  assert.equal(process.listenerCount('beforeExit'), before + 1)
+  await vexo.shutdown()
+  assert.equal(process.listenerCount('beforeExit'), before)
+})
+
 test('retries 503 and 429 with the same batch', async (t) => {
   const api = await fakeApi([
     { status: 503, headers: { 'Retry-After': '0' }, body: { success: false } },

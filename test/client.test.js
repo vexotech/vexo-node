@@ -3,6 +3,7 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const http = require('node:http')
+const net = require('node:net')
 const { Vexo } = require('..')
 
 // A local API that records each batch request and answers with the next scripted response.
@@ -166,3 +167,106 @@ test('drops messages once the queue is full', async (t) => {
   assert.equal(api.requests[0].body.batch.length, 1)
   assert.match(errors[0].message, /queue is full/)
 })
+
+test('treats capture(null) and identify(null) as a reported no-op', async (t) => {
+  const api = await fakeApi()
+  t.after(api.close)
+  const { vexo, errors } = client(api.host)
+
+  vexo.capture(null)
+  vexo.identify(null)
+  vexo.capture()
+  await vexo.shutdown()
+
+  assert.equal(api.requests.length, 0)
+  assert.equal(errors.length, 3)
+})
+
+test('drops only the message that cannot be serialized', async (t) => {
+  const api = await fakeApi()
+  t.after(api.close)
+  const { vexo, errors } = client(api.host)
+
+  vexo.capture({ distinctId: 'u', event: 'ok' })
+  vexo.capture({ distinctId: 'u', event: 'big_int', properties: { amount: 10n } })
+  await vexo.shutdown()
+
+  assert.equal(api.requests.length, 1)
+  assert.deepEqual(api.requests[0].body.batch.map((m) => m.event), ['ok'])
+  assert.equal(errors.length, 1)
+  assert.match(errors[0].message, /JSON/)
+})
+
+test('splits batches so each request body stays under 5 MB', async (t) => {
+  const api = await fakeApi()
+  t.after(api.close)
+  const { vexo, errors } = client(api.host)
+  const blob = 'x'.repeat(2 * 1024 * 1024)
+
+  for (let i = 0; i < 3; i++) {
+    vexo.capture({ distinctId: 'u', event: `e${i}`, properties: { blob } })
+  }
+  await vexo.shutdown()
+
+  assert.deepEqual(api.requests.map((r) => r.body.batch.length), [2, 1])
+  assert.deepEqual(errors, [])
+})
+
+test('sends again only the messages the server reports as failed', async (t) => {
+  const api = await fakeApi([{
+    status: 200,
+    headers: {},
+    body: { success: true, code: 200, data: { accepted: 1, dropped: [], failed: [{ index: 1, reason: 'Storing failed; retry' }] } }
+  }])
+  t.after(api.close)
+  const { vexo, errors } = client(api.host)
+
+  vexo.capture({ distinctId: 'a', event: 'stored' })
+  vexo.capture({ distinctId: 'b', event: 'failed_once' })
+  const started = Date.now()
+  await vexo.shutdown()
+
+  assert.equal(api.requests.length, 2)
+  assert.deepEqual(api.requests[1].body.batch.map((m) => m.event), ['failed_once'])
+  assert.equal(api.requests[1].body.batch[0].messageId, api.requests[0].body.batch[1].messageId)
+  assert.ok(Date.now() - started < 3000)
+  assert.deepEqual(errors, [])
+})
+
+test('stops retrying the next batches once one batch used up its retries', async (t) => {
+  const api = await fakeApi(Array.from({ length: 20 }, () => ({ status: 500, headers: { 'Retry-After': '0' } })))
+  t.after(api.close)
+  const { vexo, errors } = client(api.host, { flushAt: 1, maxRetries: 2 })
+
+  for (let i = 0; i < 3; i++) {
+    vexo.capture({ distinctId: 'u', event: `e${i}` })
+  }
+  await vexo.shutdown()
+
+  // 3 attempts for the first batch, then 1 for each of the others.
+  assert.equal(api.requests.length, 5)
+  assert.equal(errors.length, 3)
+})
+
+test('shutdown gives up at shutdownTimeout when the API is unreachable', async () => {
+  const port = await freePort()
+  const { vexo, errors } = client(`http://127.0.0.1:${port}`, { flushAt: 1, timeout: 500, shutdownTimeout: 1000 })
+
+  for (let i = 0; i < 5; i++) {
+    vexo.capture({ distinctId: 'u', event: `e${i}` })
+  }
+  const started = Date.now()
+  await vexo.shutdown()
+
+  assert.ok(Date.now() - started < 2000, `shutdown took ${Date.now() - started} ms`)
+  assert.ok(errors.some((e) => /deadline/.test(e.message)))
+})
+
+// A port with nothing listening, so connections are refused.
+async function freePort () {
+  const server = net.createServer()
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  const { port } = server.address()
+  await new Promise((resolve) => server.close(resolve))
+  return port
+}

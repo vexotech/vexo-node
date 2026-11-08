@@ -11,6 +11,8 @@ export interface VexoOptions {
   maxQueueSize?: number
   /** Request timeout in milliseconds. Default: 10000 */
   timeout?: number
+  /** How long shutdown() keeps sending, in milliseconds; what is still queued then is dropped. Default: 10000 */
+  shutdownTimeout?: number
   /** Called with send failures and server-side drops. Default: console.error */
   onError?: (error: Error & { status?: number, batch?: object[], dropped?: { message: object, reason: string }[] }) => void
 }
@@ -30,8 +32,8 @@ export interface IdentifyMessage {
 
 export class Vexo {
   constructor (apiKey: string, options?: VexoOptions)
-  capture (message: CaptureMessage): void
-  identify (message: IdentifyMessage): void
+  capture (message: CaptureMessage | null | undefined): void
+  identify (message: IdentifyMessage | null | undefined): void
   flush (): Promise<void>
   shutdown (): Promise<void>
 }

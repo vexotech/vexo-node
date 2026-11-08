@@ -4,8 +4,10 @@ const { randomUUID } = require('node:crypto')
 const { version } = require('./package.json')
 
 const DEFAULT_HOST = 'https://api.vexo.co'
-// The server rejects a batch of more than 500 messages.
+// The server rejects a batch of more than 500 messages or a body over 5 MB.
 const MAX_BATCH_SIZE = 500
+const MAX_BODY_BYTES = 5 * 1024 * 1024
+const BATCH_ENVELOPE_BYTES = Buffer.byteLength('{"batch":[]}')
 const MAX_BACKOFF_MS = 30000
 
 class Vexo {
@@ -24,19 +26,25 @@ class Vexo {
     this.maxRetries = options.maxRetries ?? 3
     this.maxQueueSize = options.maxQueueSize ?? 10000
     this.timeout = options.timeout ?? 10000
+    this.shutdownTimeout = options.shutdownTimeout ?? 10000
     this.onError = options.onError || ((error) => console.error(`[vexo] ${error.message}`))
 
     this.queue = []
     this.closed = false
     this.pending = Promise.resolve()
+    // Set by a batch that used up its retries: later batches get one attempt until a request succeeds.
+    this.circuitOpen = false
+    this.deadline = null
+    this.inflight = new Set()
     this.timer = setInterval(() => this.flush(), this.flushInterval)
     this.timer.unref()
     // A script that ends without calling shutdown() still sends what it queued.
-    process.once('beforeExit', () => this.flush())
+    process.once('beforeExit', () => this.shutdown())
   }
 
   /** Queues an event. `timestamp` (Date, ISO 8601 string or epoch ms) defaults to now. */
-  capture ({ distinctId, event, properties, timestamp } = {}) {
+  capture (message) {
+    const { distinctId, event, properties, timestamp } = message || {}
     if (!distinctId || !event) {
       this.onError(new Error('vexo: capture needs a distinctId and an event'))
       return
@@ -51,7 +59,8 @@ class Vexo {
   }
 
   /** Queues an identify: merges `traits` into the person with this distinct id. */
-  identify ({ distinctId, traits } = {}) {
+  identify (message) {
+    const { distinctId, traits } = message || {}
     if (!distinctId) {
       this.onError(new Error('vexo: identify needs a distinctId'))
       return
@@ -65,10 +74,17 @@ class Vexo {
     return this.pending
   }
 
-  /** Stops the interval timer and sends everything queued. Call it before your process exits. */
+  /**
+   * Stops the interval timer and sends everything queued, giving up after `shutdownTimeout` ms: what is still queued
+   * then is dropped and reported to onError. Call it before your process exits.
+   */
   async shutdown () {
-    this.closed = true
-    clearInterval(this.timer)
+    if (!this.closed) {
+      this.closed = true
+      clearInterval(this.timer)
+      this.deadline = Date.now() + this.shutdownTimeout
+      setTimeout(() => this.interrupt(), this.shutdownTimeout).unref()
+    }
     await this.flush()
   }
 
@@ -81,7 +97,19 @@ class Vexo {
       this.onError(new Error('vexo: the queue is full; message dropped'))
       return
     }
-    this.queue.push({ ...message, messageId: randomUUID() })
+    const entry = { message: { ...message, messageId: randomUUID() } }
+    try {
+      entry.json = JSON.stringify(entry.message)
+    } catch (error) {
+      this.onError(new Error(`vexo: message dropped, it can't be sent as JSON: ${error.message}`))
+      return
+    }
+    entry.bytes = Buffer.byteLength(entry.json)
+    if (entry.bytes + BATCH_ENVELOPE_BYTES > MAX_BODY_BYTES) {
+      this.onError(new Error('vexo: message dropped, it is larger than 5 MB'))
+      return
+    }
+    this.queue.push(entry)
     if (this.queue.length >= this.flushAt) {
       this.flush()
     }
@@ -89,50 +117,125 @@ class Vexo {
 
   async drain () {
     while (this.queue.length > 0) {
-      const batch = this.queue.splice(0, this.flushAt)
+      if (this.deadlinePassed()) {
+        const dropped = this.queue.splice(0)
+        const error = new Error(`vexo: shutdown deadline reached; ${dropped.length} message(s) dropped`)
+        error.batch = dropped.map((entry) => entry.message)
+        this.onError(error)
+        return
+      }
+      const batch = this.nextBatch()
       try {
-        const result = await this.send(batch)
-        if (result && result.dropped && result.dropped.length > 0) {
-          const error = new Error(`vexo: the server dropped ${result.dropped.length} message(s): ${result.dropped[0].reason}`)
-          error.dropped = result.dropped.map(({ index, reason }) => ({ message: batch[index], reason }))
-          this.onError(error)
-        }
+        await this.send(batch)
       } catch (error) {
-        error.batch = batch
+        error.batch = batch.map((entry) => entry.message)
         this.onError(error)
       }
     }
   }
 
-  // POST /v1/batch, retrying network errors, 429 and 5xx with exponential backoff (or the server's Retry-After).
+  // Up to flushAt messages that fit in one request body.
+  nextBatch () {
+    let bytes = BATCH_ENVELOPE_BYTES
+    let count = 0
+    while (count < this.queue.length && count < this.flushAt && bytes + this.queue[count].bytes + count <= MAX_BODY_BYTES) {
+      bytes += this.queue[count].bytes
+      count++
+    }
+    return this.queue.splice(0, count)
+  }
+
+  // POST /v1/batch. Network errors, 429 and 5xx are retried with exponential backoff (or the server's Retry-After);
+  // messages the server reports as failed are sent again the same way. Dropped messages are reported, not retried.
   async send (batch) {
+    const maxRetries = this.circuitOpen ? 0 : this.maxRetries
     for (let attempt = 0; ; attempt++) {
       let response
       try {
-        response = await fetch(`${this.host}/v1/batch`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'X-Api-Key': this.apiKey, 'User-Agent': `vexo-node/${version}` },
-          body: JSON.stringify({ batch }),
-          signal: AbortSignal.timeout(this.timeout)
-        })
+        response = await this.post(`{"batch":[${batch.map((entry) => entry.json).join(',')}]}`)
       } catch (error) {
-        if (attempt >= this.maxRetries) {
+        if (attempt >= maxRetries || this.deadlinePassed()) {
+          this.circuitOpen = true
           throw error
         }
-        await sleep(backoff(attempt))
+        await this.wait(backoff(attempt))
         continue
       }
       if (response.ok) {
-        const body = await response.json()
-        return body.data
+        this.circuitOpen = false
+        const result = (await response.json()).data || {}
+        this.report(batch, result.dropped, 'the server dropped')
+        const failed = (result.failed || []).map(({ index }) => batch[index]).filter(Boolean)
+        if (failed.length === 0) {
+          return
+        }
+        if (attempt >= maxRetries || this.deadlinePassed()) {
+          this.report(batch, result.failed, 'the server could not store')
+          return
+        }
+        batch = failed
+        await this.wait(backoff(attempt))
+        continue
       }
       const retryable = response.status === 429 || response.status >= 500
-      if (!retryable || attempt >= this.maxRetries) {
+      if (!retryable || attempt >= maxRetries || this.deadlinePassed()) {
+        if (retryable) {
+          this.circuitOpen = true
+        }
         const error = new Error(`vexo: batch rejected with HTTP ${response.status}: ${await response.text()}`)
         error.status = response.status
         throw error
       }
-      await sleep(retryAfter(response) ?? backoff(attempt))
+      await this.wait(retryAfter(response) ?? backoff(attempt))
+    }
+  }
+
+  async post (body) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(new Error('vexo: request timed out')), this.timeout)
+    this.inflight.add(controller)
+    try {
+      return await fetch(`${this.host}/v1/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Api-Key': this.apiKey, 'User-Agent': `vexo-node/${version}` },
+        body,
+        signal: controller.signal
+      })
+    } finally {
+      clearTimeout(timer)
+      this.inflight.delete(controller)
+    }
+  }
+
+  report (batch, results, what) {
+    if (results && results.length > 0) {
+      const error = new Error(`vexo: ${what} ${results.length} message(s): ${results[0].reason}`)
+      error.dropped = results.map(({ index, reason }) => ({ message: batch[index] && batch[index].message, reason }))
+      this.onError(error)
+    }
+  }
+
+  deadlinePassed () {
+    return this.deadline !== null && Date.now() >= this.deadline
+  }
+
+  // Sleeps, but never past the shutdown deadline.
+  wait (ms) {
+    const remaining = this.deadline === null ? ms : Math.max(0, this.deadline - Date.now())
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, Math.min(ms, remaining))
+      this.wake = () => {
+        clearTimeout(timer)
+        resolve()
+      }
+    })
+  }
+
+  // At the shutdown deadline: abort the request in flight and end any backoff wait.
+  interrupt () {
+    this.inflight.forEach((controller) => controller.abort(new Error('vexo: shutdown deadline reached')))
+    if (this.wake) {
+      this.wake()
     }
   }
 }
@@ -145,10 +248,6 @@ function backoff (attempt) {
 function retryAfter (response) {
   const seconds = Number(response.headers.get('retry-after'))
   return response.headers.has('retry-after') && Number.isFinite(seconds) ? Math.min(seconds * 1000, 60000) : null
-}
-
-function sleep (ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 module.exports = { Vexo }

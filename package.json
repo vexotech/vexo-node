@@ -1,0 +1,25 @@
+{
+  "name": "vexo-node",
+  "version": "0.1.0",
+  "description": "Send server-side events and identifies to Vexo from Node.js.",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "keywords": [
+    "vexo",
+    "analytics",
+    "server-side",
+    "events"
+  ],
+  "homepage": "https://docs.vexo.co/server-side/capture",
+  "license": "MIT"
+}

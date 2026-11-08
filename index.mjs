@@ -106,7 +106,7 @@ export class Vexo {
     }
     const entry = { message: { ...message, messageId: messageId ? String(messageId) : randomUUID() } }
     try {
-      entry.json = JSON.stringify(entry.message)
+      entry.json = JSON.stringify(entry.message, finiteNumbers)
     } catch (error) {
       this.onError(new Error(`vexo: message dropped, it can't be sent as JSON: ${error.message}`))
       return
@@ -267,6 +267,15 @@ function randomUUID () {
   hex[12] = '4'
   hex[16] = '89ab'[Math.floor(Math.random() * 4)]
   return hex.join('').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5')
+}
+
+// JSON.stringify writes NaN and Infinity as null, which would change the caller's data silently, so the message is
+// dropped instead, as the other Vexo SDKs do (SPEC.md M8).
+function finiteNumbers (key, value) {
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new TypeError(`${key} is ${value}, which JSON can't represent`)
+  }
+  return value
 }
 
 // Integer epoch milliseconds for a Date, a number, or the default (now); an ISO 8601 string is sent as is.

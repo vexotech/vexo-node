@@ -76,7 +76,7 @@ Stops the interval timer and sends everything queued, for up to `shutdownTimeout
 
 The client never throws from `capture()` or `identify()`. Failures go to `onError`:
 
-- A message that `JSON.stringify` can't serialize (for example, one with a `BigInt` property) or that is over 5 MB is dropped when you queue it; the rest of the queue is unaffected.
+- A message that `JSON.stringify` can't serialize (for example, one with a `BigInt` property), one with a `NaN` or `Infinity` value (which `JSON.stringify` would turn into `null`), or one over 5 MB is dropped when you queue it; the rest of the queue is unaffected.
 - A batch that still fails after the retries, or that the API rejects with a `4xx`, arrives as an error with `status` and `batch` (the messages it held). After that, the next batches get a single attempt until a request succeeds, so an unreachable API doesn't hold up your process.
 - A message the API dropped (for example, properties over 64 KB) arrives as an error with `dropped`, a list of `{ message, reason }`. Messages the API reports as `failed` are retried, and reported the same way if they still fail.
 - Messages still queued at the shutdown deadline arrive as one error with `batch`.

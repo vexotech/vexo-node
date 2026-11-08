@@ -253,6 +253,20 @@ test('drops only the message that cannot be serialized', async (t) => {
   assert.match(errors[0].message, /JSON/)
 })
 
+test('drops a message with NaN or Infinity instead of sending null', async (t) => {
+  const api = await fakeApi()
+  t.after(api.close)
+  const { vexo, errors } = client(api.host)
+
+  vexo.capture({ distinctId: 'u', event: 'nan', properties: { x: NaN } })
+  vexo.capture({ distinctId: 'u', event: 'inf', properties: { nested: { x: -Infinity } } })
+  vexo.capture({ distinctId: 'u', event: 'ok', properties: { x: 1.5 } })
+  await vexo.shutdown()
+
+  assert.deepEqual(api.requests[0].body.batch.map((m) => m.event), ['ok'])
+  assert.equal(errors.length, 2)
+})
+
 test('splits batches so each request body stays under 5 MB', async (t) => {
   const api = await fakeApi()
   t.after(api.close)

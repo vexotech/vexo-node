@@ -1,7 +1,7 @@
 {
   "name": "vexo-node",
   "version": "0.1.0",
-  "description": "Send server-side events and identifies to Vexo from Node.js.",
+  "description": "Send server-side events and identifies to Vexo from Node.js, Deno, Bun, and edge runtimes.",
   "main": "index.js",
   "types": "index.d.ts",
   "exports": {
@@ -30,7 +30,11 @@
     "vexo",
     "analytics",
     "server-side",
-    "events"
+    "events",
+    "edge",
+    "cloudflare-workers",
+    "deno",
+    "bun"
   ],
   "homepage": "https://docs.vexo.co/server-side/capture",
   "license": "MIT"

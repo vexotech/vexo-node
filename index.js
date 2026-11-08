@@ -160,6 +160,10 @@ class Vexo {
   async send (batch) {
     const maxRetries = this.circuitOpen ? 0 : this.maxRetries
     for (let attempt = 0; ; attempt++) {
+      // A backoff wait that the shutdown deadline cut short ends the batch: no attempt starts after the deadline.
+      if (attempt > 0 && this.deadlinePassed()) {
+        throw new Error('vexo: shutdown deadline reached before the batch was sent')
+      }
       let response
       try {
         response = await this.post(`{"batch":[${batch.map((entry) => entry.json).join(',')}]}`)

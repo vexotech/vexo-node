@@ -318,6 +318,21 @@ test('stops retrying the next batches once one batch used up its retries', async
   assert.equal(errors.length, 3)
 })
 
+test('the shutdown deadline ends a Retry-After wait and starts no retry', async (t) => {
+  const api = await fakeApi([{ status: 503, headers: { 'Retry-After': '30' }, body: { success: false } }])
+  t.after(api.close)
+  const { vexo, errors } = client(api.host, { flushAt: 1, shutdownTimeout: 300 })
+
+  vexo.capture({ distinctId: 'u', event: 'a' })
+  while (api.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 10))
+  const started = Date.now()
+  await vexo.shutdown()
+
+  assert.ok(Date.now() - started < 1500, `shutdown took ${Date.now() - started} ms`)
+  assert.equal(api.requests.length, 1)
+  assert.deepEqual(errors.flatMap((e) => e.batch || []).map((m) => m.event), ['a'])
+})
+
 test('shutdown gives up at shutdownTimeout when the API is unreachable', async () => {
   const port = await freePort()
   const { vexo, errors } = client(`http://127.0.0.1:${port}`, { flushAt: 1, timeout: 500, shutdownTimeout: 1000 })

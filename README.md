@@ -56,9 +56,9 @@ Copy your app's API key from the app's [settings](https://docs.vexo.co/settings/
 | `shutdownTimeout` | `10000` | How long `shutdown()` keeps sending, in milliseconds. |
 | `onError` | `console.error` | Called with send failures and with messages the server dropped. |
 
-### `vexo.capture({ distinctId, event, properties?, timestamp? })`
+### `vexo.capture({ distinctId, event, properties?, timestamp?, messageId? })`
 
-Queues an event. `timestamp` is a `Date`, an ISO 8601 string, or epoch milliseconds, and defaults to the time you call `capture()`.
+Queues an event. `timestamp` is a `Date`, an ISO 8601 string with an offset, or epoch milliseconds, and defaults to the time you call `capture()`. A `Date` or a number is sent as integer epoch milliseconds. `messageId` defaults to a random UUID; pass your own, such as an order ID, so that Vexo stores the event once even when your code sends it twice.
 
 ### `vexo.identify({ distinctId, traits? })`
 

@@ -17,7 +17,7 @@ async function fakeApi (responses = []) {
       const next = responses.shift() || { status: 200 }
       const accepted = requests.at(-1).body.batch.length
       res.writeHead(next.status, { 'Content-Type': 'application/json', ...next.headers })
-      res.end(JSON.stringify(next.body || { success: true, code: 200, data: { accepted, dropped: [] } }))
+      res.end(next.raw ?? JSON.stringify(next.body || { success: true, code: 200, data: { accepted, dropped: [] } }))
     })
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -52,8 +52,35 @@ test('sends queued messages as one batch with the API key', async (t) => {
   assert.equal(capture.type, 'capture')
   assert.equal(capture.event, 'purchase')
   assert.deepEqual(capture.properties, { amount: 42 })
-  assert.ok(!Number.isNaN(Date.parse(capture.timestamp)))
+  assert.ok(Number.isInteger(capture.timestamp) && Math.abs(capture.timestamp - Date.now()) < 5000)
   assert.notEqual(identify.messageId, capture.messageId)
+  assert.deepEqual(errors, [])
+})
+
+test('sends timestamps as integer epoch ms and a caller\'s messageId unchanged', async (t) => {
+  const api = await fakeApi()
+  t.after(api.close)
+  const { vexo } = client(api.host)
+
+  vexo.capture({ distinctId: 'u', event: 'a', timestamp: new Date('2026-11-07T12:00:00Z'), messageId: 'order-1' })
+  vexo.capture({ distinctId: 'u', event: 'b', timestamp: 1794052800000.9 })
+  vexo.capture({ distinctId: 'u', event: 'c', timestamp: '2026-11-07T12:00:00+02:00' })
+  await vexo.shutdown()
+
+  const [date, number, iso] = api.requests[0].body.batch
+  assert.deepEqual([date.timestamp, number.timestamp, iso.timestamp], [1794052800000, 1794052800000, '2026-11-07T12:00:00+02:00'])
+  assert.equal(date.messageId, 'order-1')
+  assert.match(number.messageId, /^[0-9a-f-]{36}$/)
+})
+
+test('counts a 2xx it cannot parse as accepted', async (t) => {
+  const api = await fakeApi([{ status: 200, raw: '<html>ok</html>' }])
+  t.after(api.close)
+  const { vexo, errors } = client(api.host)
+
+  vexo.capture({ distinctId: 'u', event: 'a' })
+  await vexo.shutdown()
+  assert.equal(api.requests.length, 1)
   assert.deepEqual(errors, [])
 })
 

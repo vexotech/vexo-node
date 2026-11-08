@@ -21,8 +21,10 @@ export interface CaptureMessage {
   distinctId: string
   event: string
   properties?: Record<string, unknown>
-  /** Date, ISO 8601 string or epoch milliseconds. Default: now */
+  /** Date, ISO 8601 string or epoch milliseconds; a Date or number is sent as integer epoch ms. Default: now */
   timestamp?: Date | string | number
+  /** Unique ID that makes a retried message count once. Default: a random UUID */
+  messageId?: string
 }
 
 export interface IdentifyMessage {

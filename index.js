@@ -42,9 +42,12 @@ class Vexo {
     process.once('beforeExit', () => this.shutdown())
   }
 
-  /** Queues an event. `timestamp` (Date, ISO 8601 string or epoch ms) defaults to now. */
+  /**
+   * Queues an event. `timestamp` (Date, ISO 8601 string or epoch ms) defaults to now. `messageId` defaults to a
+   * random UUID; pass your own (an order ID, say) to dedupe across your own retries.
+   */
   capture (message) {
-    const { distinctId, event, properties, timestamp } = message || {}
+    const { distinctId, event, properties, timestamp, messageId } = message || {}
     if (!distinctId || !event) {
       this.onError(new Error('vexo: capture needs a distinctId and an event'))
       return
@@ -54,8 +57,8 @@ class Vexo {
       distinctId: String(distinctId),
       event: String(event),
       properties: properties || {},
-      timestamp: timestamp instanceof Date ? timestamp.toISOString() : (timestamp ?? new Date().toISOString())
-    })
+      timestamp: epochMillis(timestamp)
+    }, messageId)
   }
 
   /** Queues an identify: merges `traits` into the person with this distinct id. */
@@ -88,7 +91,7 @@ class Vexo {
     await this.flush()
   }
 
-  enqueue (message) {
+  enqueue (message, messageId) {
     if (this.closed) {
       this.onError(new Error('vexo: the client is shut down; message dropped'))
       return
@@ -97,7 +100,7 @@ class Vexo {
       this.onError(new Error('vexo: the queue is full; message dropped'))
       return
     }
-    const entry = { message: { ...message, messageId: randomUUID() } }
+    const entry = { message: { ...message, messageId: messageId ? String(messageId) : randomUUID() } }
     try {
       entry.json = JSON.stringify(entry.message)
     } catch (error) {
@@ -163,7 +166,7 @@ class Vexo {
       }
       if (response.ok) {
         this.circuitOpen = false
-        const result = (await response.json()).data || {}
+        const result = await responseData(response)
         this.report(batch, result.dropped, 'the server dropped')
         const failed = (result.failed || []).map(({ index }) => batch[index]).filter(Boolean)
         if (failed.length === 0) {
@@ -237,6 +240,27 @@ class Vexo {
     if (this.wake) {
       this.wake()
     }
+  }
+}
+
+// Integer epoch milliseconds for a Date, a number, or the default (now); an ISO 8601 string is sent as is.
+function epochMillis (timestamp) {
+  if (timestamp === undefined || timestamp === null) {
+    return Date.now()
+  }
+  if (timestamp instanceof Date) {
+    return timestamp.getTime()
+  }
+  return typeof timestamp === 'number' ? Math.trunc(timestamp) : timestamp
+}
+
+// The envelope's data. A 2xx whose body isn't the envelope still means the API accepted the batch (SPEC W6).
+async function responseData (response) {
+  try {
+    const data = (await response.json())?.data
+    return data && typeof data === 'object' ? data : {}
+  } catch {
+    return {}
   }
 }
 

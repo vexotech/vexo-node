@@ -333,6 +333,25 @@ test('the shutdown deadline ends a Retry-After wait and starts no retry', async 
   assert.deepEqual(errors.flatMap((e) => e.batch || []).map((m) => m.event), ['a'])
 })
 
+test('no retry starts after the shutdown deadline even when Date.now() lags the timers', async (t) => {
+  // Node measures a timer from the event loop's cached time, which can trail Date.now(), so the timer that ends a wait
+  // at the deadline can fire while Date.now() still reads a few milliseconds before it. The deadline must count as
+  // reached anyway.
+  const api = await fakeApi([{ status: 503, headers: { 'Retry-After': '30' }, body: { success: false } }])
+  t.after(api.close)
+  const { vexo } = client(api.host, { flushAt: 1, shutdownTimeout: 200 })
+
+  vexo.capture({ distinctId: 'u', event: 'a' })
+  while (api.requests.length === 0) await new Promise((resolve) => setTimeout(resolve, 10))
+  const done = vexo.shutdown() // sets the deadline from the real clock
+  const realNow = Date.now
+  Date.now = () => realNow() - 20 // from here on, Date.now() trails the timers by 20 ms
+  t.after(() => { Date.now = realNow })
+  await done
+
+  assert.equal(api.requests.length, 1)
+})
+
 test('shutdown gives up at shutdownTimeout when the API is unreachable', async () => {
   const port = await freePort()
   const { vexo, errors } = client(`http://127.0.0.1:${port}`, { flushAt: 1, timeout: 500, shutdownTimeout: 1000 })

@@ -34,6 +34,9 @@ export class Vexo {
     // Set by a batch that used up its retries: later batches get one attempt until a request succeeds.
     this.circuitOpen = false
     this.deadline = null
+    // Set once the deadline ends a wait or interrupt() runs, so the deadline counts as reached even when Date.now()
+    // trails the timer that ended the wait (Node measures timers from the event loop's cached time).
+    this.deadlineReached = false
     this.inflight = new Set()
     // flushInterval 0: no timer, for runtimes without a long-lived process; send with flush() in each request.
     if (this.flushInterval > 0) {
@@ -227,14 +230,20 @@ export class Vexo {
   }
 
   deadlinePassed () {
-    return this.deadline !== null && Date.now() >= this.deadline
+    return this.deadlineReached || (this.deadline !== null && Date.now() >= this.deadline)
   }
 
   // Sleeps, but never past the shutdown deadline.
   wait (ms) {
     const remaining = this.deadline === null ? ms : Math.max(0, this.deadline - Date.now())
     return new Promise((resolve) => {
-      const timer = setTimeout(resolve, Math.min(ms, remaining))
+      const cutShort = remaining < ms
+      const timer = setTimeout(() => {
+        if (cutShort) {
+          this.deadlineReached = true
+        }
+        resolve()
+      }, Math.min(ms, remaining))
       this.wake = () => {
         clearTimeout(timer)
         resolve()
@@ -244,6 +253,7 @@ export class Vexo {
 
   // At the shutdown deadline: abort the request in flight and end any backoff wait.
   interrupt () {
+    this.deadlineReached = true
     this.inflight.forEach((controller) => controller.abort(new Error('vexo: shutdown deadline reached')))
     if (this.wake) {
       this.wake()

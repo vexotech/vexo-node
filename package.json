@@ -37,5 +37,9 @@
     "bun"
   ],
   "homepage": "https://docs.vexo.co/server-side/capture",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vexotech/vexo-node.git"
+  },
   "license": "MIT"
 }
